@@ -1,0 +1,6 @@
+[submodule "music_server"]
+	path = music_server
+	url = git@gitlab.com:lyoudr/music_server.git
+[submodule "music_analysis"]
+	path = music_analysis
+	url = git@gitlab.com:lyoudr/music_analysis.git
