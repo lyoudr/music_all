@@ -1,0 +1,117 @@
+version: '3'
+
+services:
+  master_db:
+    container_name: master_db
+    image : postgres:latest
+    environment:
+      - POSTGRES_DB=music
+      - POSTGRES_USER=ann
+      - POSTGRES_PASSWORD=GxXynskDj134yi7P
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgres.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
+    volumes:
+      - ./data-slave:/tmp/postgres_slave
+      - ./database/init_conf.sh:/docker-entrypoint-initdb.d/init_conf.sh
+      - ./database/postgres.conf:/etc/postgresql/postgres.conf
+      - ./database/pg_hba.conf:/etc/postgresql/pg_hba.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --dbname music -U ann"]
+      timeout: 30s
+      retries: 3
+    ports:
+      - 5433:5432
+
+  slave_db: # slave database
+    container_name: slave_db
+    image : postgres:latest
+    environment:
+      - POSTGRES_DB=music
+      - POSTGRES_USER=ann
+      - POSTGRES_PASSWORD=GxXynskDj134yi7P
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - ./data-slave:/var/lib/postgresql/data 
+      - ./database/postgresql.auto.conf:/var/lib/postgresql/data/postgresql.auto.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --dbname music -U ann"]
+      timeout: 30s
+      retries: 3
+    depends_on:
+      master_db:
+        condition: service_healthy
+    ports:
+      - 5434:5432
+
+  ann_server_1:
+    build:
+      context: music_server/
+      dockerfile: Dockerfile.server
+      args: 
+        - ENV=dev
+        - STATIC_ROOT=/music/static-root
+        - MEDIA_ROOT=/tmp/media
+        - DB_HOST=master_db # have to use "localhost" to refer to host when "ecs_network_mode" is "awsvpc" 
+        - DB_NAME=music
+        - DB_USER=ann
+        - DB_PASSWORD=GxXynskDj134yi7P
+        - GRPC_HOST=analysis_server:5100
+        - AWS_ACCESS_KEY_ID=
+        - AWS_SECRET_ACCESS_KEY=
+        - AWS_STORAGE_BUCKET_NAME=lyoudrmusic
+    restart: on-failure
+    healthcheck :
+      test : ["CMD-SHELL", "uwsgi_curl -X GET localhost:5000 /api/blog/class"]
+      timeout : 60s
+      retries : 10
+    ports:
+      - 5200:5000
+    depends_on:
+      slave_db:
+        condition: service_healthy
+    volumes:
+      - music:/music/static-root
+
+  analysis_server:
+    build:
+      context: music_analysis/
+      dockerfile: Dockerfile
+      args:
+        - DB_HOST=master_db # have to use "localhost" to refer to host when "ecs_network_mode" is "awsvpc" 
+        - DB_NAME=music
+        - DB_USER=ann
+        - DB_PASSWORD=GxXynskDj134yi7P
+    # command: 
+    #   - '/bin/bash'
+    #   - '-c'
+    #   - '/bin/sleep 30 && /prog "first argument"'
+    restart: on-failure
+    ports:
+      - 5300:5100
+    # healthcheck:
+    #   test: ["CMD-SHELL", "./grpcurl", "-import-path", "/analysis/protos/sales", "-proto", "sales.proto", "list"]
+    #   timeout: 60s
+    #   retries: 5
+    depends_on:
+      ann_server_1:
+        condition: service_healthy
+
+  nginx:
+    build:
+      context: music_server/
+      dockerfile: Dockerfile.nginx
+    healthcheck :
+      test : ["CMD-SHELL", "curl -f http://localhost/health"]
+      timeout : 60s
+      retries : 10
+    ports: 
+      - 80:80
+      - 443:443
+    depends_on:
+      ann_server_1:
+        condition: service_healthy
+    volumes:
+      - music:/tmp/static-root
+  
+volumes:
+  music:
