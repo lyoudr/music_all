@@ -1,20 +1,21 @@
+### 1. Structure
+#                           slave db 1
+# Nginx => Django Server => master db
+#                           salve db 2
 version: '3'
 
 services:
   master_db:
     container_name: master_db
-    image : postgres:latest
+    image : docker.io/bitnami/postgresql:latest
     environment:
-      - POSTGRES_DB=music
-      - POSTGRES_USER=ann
-      - POSTGRES_PASSWORD=GxXynskDj134yi7P
-      - POSTGRES_HOST_AUTH_METHOD=trust
-    command: ["postgres", "-c", "config_file=/etc/postgresql/postgres.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
-    volumes:
-      - ./data-slave:/tmp/postgres_slave
-      - ./database/init_conf.sh:/docker-entrypoint-initdb.d/init_conf.sh
-      - ./database/postgres.conf:/etc/postgresql/postgres.conf
-      - ./database/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - POSTGRESQL_REPLICATION_MODE=master
+      - POSTGRESQL_REPLICATION_USER=replicator
+      - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
+      - POSTGRESQL_USERNAME=ann
+      - POSTGRESQL_PASSWORD=GxXynskDj134yi7P
+      - POSTGRESQL_DATABASE=music
+      - ALLOW_EMPTY_PASSWORD=yes
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --dbname music -U ann"]
       timeout: 30s
@@ -22,17 +23,17 @@ services:
     ports:
       - 5433:5432
 
-  slave_db: # slave database
-    container_name: slave_db
-    image : postgres:latest
+  slave_db_1: # slave database
+    container_name: slave_db_1
+    image: docker.io/bitnami/postgresql:latest
     environment:
-      - POSTGRES_DB=music
-      - POSTGRES_USER=ann
-      - POSTGRES_PASSWORD=GxXynskDj134yi7P
-      - POSTGRES_HOST_AUTH_METHOD=trust
-    volumes:
-      - ./data-slave:/var/lib/postgresql/data 
-      - ./database/postgresql.auto.conf:/var/lib/postgresql/data/postgresql.auto.conf
+      - POSTGRESQL_REPLICATION_MODE=slave
+      - POSTGRESQL_REPLICATION_USER=replicator
+      - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
+      - POSTGRESQL_MASTER_HOST=master_db
+      - POSTGRESQL_PASSWORD=GxXynskDj134yi7P
+      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - ALLOW_EMPTY_PASSWORD=yes
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --dbname music -U ann"]
       timeout: 30s
@@ -42,6 +43,27 @@ services:
         condition: service_healthy
     ports:
       - 5434:5432
+  
+  slave_db_2: 
+    container_name: slave_db_2
+    image: docker.io/bitnami/postgresql:latest
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=slave
+      - POSTGRESQL_REPLICATION_USER=replicator
+      - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
+      - POSTGRESQL_MASTER_HOST=master_db
+      - POSTGRESQL_PASSWORD=GxXynskDj134yi7P
+      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - ALLOW_EMPTY_PASSWORD=yes
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --dbname music -U ann"]
+      timeout: 30s
+      retries: 3
+    depends_on:
+      master_db:
+        condition: service_healthy
+    ports:
+      - 5435:5432
 
   ann_server_1:
     build:
@@ -67,7 +89,7 @@ services:
     ports:
       - 5200:5000
     depends_on:
-      slave_db:
+      slave_db_1:
         condition: service_healthy
     volumes:
       - music:/music/static-root
@@ -81,10 +103,6 @@ services:
         - DB_NAME=music
         - DB_USER=ann
         - DB_PASSWORD=GxXynskDj134yi7P
-    # command: 
-    #   - '/bin/bash'
-    #   - '-c'
-    #   - '/bin/sleep 30 && /prog "first argument"'
     restart: on-failure
     ports:
       - 5300:5100
