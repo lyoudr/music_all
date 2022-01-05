@@ -1,17 +1,26 @@
-### 1. Structure
+### Structure
 #                           slave db 1
 # Nginx => Django Server => master db
 #                           salve db 2
+# The following database architecture is for streaming replication
+
 version: '3'
 
 services:
-  master_db:
-    container_name: master_db
-    image : docker.io/bitnami/postgresql:latest
+  pg-0: # master database
+    container_name: pg-0
+    image : bitnami/postgresql-repmgr:latest
     environment:
-      - POSTGRESQL_REPLICATION_MODE=master
-      - POSTGRESQL_REPLICATION_USER=replicator
-      - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
+      # - POSTGRESQL_REPLICATION_MODE=master
+      # - POSTGRESQL_REPLICATION_USER=replicator
+      # - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
+      - REPMGR_PARTNER_NODES=pg-0,pg-1,pg-2
+      - REPMGR_NODE_NAME=pg-0
+      - REPMGR_NODE_NETWORK_NAME=pg-0
+      - REPMGR_PRIMARY_HOST=pg-0
+      - REPMGR_PASSWORD=repmgrpass
+
+      - POSTGRESQL_POSTGRES_PASSWORD=adminpassword
       - POSTGRESQL_USERNAME=ann
       - POSTGRESQL_PASSWORD=GxXynskDj134yi7P
       - POSTGRESQL_DATABASE=music
@@ -23,47 +32,104 @@ services:
     ports:
       - 5433:5432
 
-  slave_db_1: # slave database
-    container_name: slave_db_1
-    image: docker.io/bitnami/postgresql:latest
+  pg-1: # slave database 1
+    container_name: pg-1
+    image: bitnami/postgresql-repmgr:latest
     environment:
-      - POSTGRESQL_REPLICATION_MODE=slave
-      - POSTGRESQL_REPLICATION_USER=replicator
-      - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
-      - POSTGRESQL_MASTER_HOST=master_db
+      # - POSTGRESQL_REPLICATION_MODE=slave
+      # - POSTGRESQL_REPLICATION_USER=replicator
+      # - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
+      - REPMGR_PARTNER_NODES=pg-0,pg-1,pg-2
+      - REPMGR_NODE_NAME=pg-1
+      - REPMGR_NODE_NETWORK_NAME=pg-1
+      - REPMGR_PRIMARY_HOST=pg-0
+      - REPMGR_PASSWORD=repmgrpass
+      
+      - POSTGRESQL_POSTGRES_PASSWORD=adminpassword
+      # - POSTGRESQL_MASTER_HOST=pg-0
+      # - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - POSTGRESQL_USERNAME=ann
       - POSTGRESQL_PASSWORD=GxXynskDj134yi7P
-      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - POSTGRESQL_DATABASE=music
       - ALLOW_EMPTY_PASSWORD=yes
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --dbname music -U ann"]
       timeout: 30s
       retries: 3
     depends_on:
-      master_db:
+      pg-0:
         condition: service_healthy
     ports:
       - 5434:5432
   
-  slave_db_2: 
-    container_name: slave_db_2
-    image: docker.io/bitnami/postgresql:latest
+  pg-2: # slave database 2
+    container_name: pg-2
+    image: bitnami/postgresql-repmgr:latest
     environment:
-      - POSTGRESQL_REPLICATION_MODE=slave
-      - POSTGRESQL_REPLICATION_USER=replicator
-      - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
-      - POSTGRESQL_MASTER_HOST=master_db
+      # - POSTGRESQL_REPLICATION_MODE=slave
+      # - POSTGRESQL_REPLICATION_USER=replicator
+      # - POSTGRESQL_REPLICATION_PASSWORD=replicator_passwd
+      - REPMGR_PARTNER_NODES=pg-0,pg-1,pg-2
+      - REPMGR_NODE_NAME=pg-2
+      - REPMGR_NODE_NETWORK_NAME=pg-2
+      - REPMGR_PRIMARY_HOST=pg-0
+      - REPMGR_PASSWORD=repmgrpass
+      
+      - POSTGRESQL_POSTGRES_PASSWORD=adminpassword
+      # - POSTGRESQL_MASTER_HOST=pg-0
+      # - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - POSTGRESQL_USERNAME=ann
       - POSTGRESQL_PASSWORD=GxXynskDj134yi7P
-      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - POSTGRESQL_DATABASE=music
       - ALLOW_EMPTY_PASSWORD=yes
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --dbname music -U ann"]
       timeout: 30s
       retries: 3
     depends_on:
-      master_db:
+      pg-1:
         condition: service_healthy
     ports:
       - 5435:5432
+
+  pg_pool: # database load balancer
+    # Pgpool-II
+    # 1. Connection Pooling:
+    # Pgpool-II saves connections to the PostgreSQL servers, and reuse them whenever a new connection with the same properties (i.e. username, database, protocol version) comes in. 
+    # It reduces connection overhead, and improves system's overall throughput.
+
+    # 2. Replication
+    # Pgpool-II can manage multiple PostgreSQL servers. Using the replication function enables creating a realtime backup on 2 or more physical disks, so 
+    # that the service can continue without stopping servers in case of a disk failure.
+
+    # 3. Load Balancing
+    # If a database is replicated, executing a SELECT query on any server will return the same result. 
+    # Pgpool-II takes an advantage of the replication feature to reduce the load on each PostgreSQL server by distributing SELECT queries among multiple servers, improving system's overall throughput.
+
+    # 4. Limiting Exceeding Connections
+    # There is a limit on the maximum number of concurrent connections with PostgreSQL, and connections are rejected after this many connections.
+    # Setting the maximum number of connections, however, increases resource consumption and affect system performance.
+    image: bitnami/pgpool:latest
+    ports: 
+      - 5436:5432
+    environment:
+      - PGPOOL_BACKEND_NODES=0:pg-0:5432,1:pg-1:5432,2:pg-2:5432
+      - PGPOOL_SR_CHECK_USER=postgres
+      - PGPOOL_SR_CHECK_PASSWORD=adminpassword
+      - PGPOOL_ENABLE_LDAP=no
+      - PGPOOL_ADMIN_USERNAME=admin
+      - PGPOOL_ADMIN_PASSWORD=adminpassword
+      - PGPOOL_POSTGRES_USERNAME=postgres
+      - PGPOOL_POSTGRES_PASSWORD=adminpassword
+      - PGPOOL_USERNAME=ann
+      - PGPOOL_PASSWORD=GxXynskDj134yi7P
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/scripts/pgpool/healthcheck.sh"]
+      timeout: 30s
+      retries: 3
+    depends_on:
+      pg-2:
+        condition: service_healthy
 
   ann_server_1:
     build:
@@ -73,7 +139,7 @@ services:
         - ENV=dev
         - STATIC_ROOT=/music/static-root
         - MEDIA_ROOT=/tmp/media
-        - DB_HOST=master_db # have to use "localhost" to refer to host when "ecs_network_mode" is "awsvpc" 
+        - DB_HOST=pg-0 # have to use "localhost" to refer to host when "ecs_network_mode" is "awsvpc" 
         - DB_NAME=music
         - DB_USER=ann
         - DB_PASSWORD=GxXynskDj134yi7P
@@ -89,7 +155,7 @@ services:
     ports:
       - 5200:5000
     depends_on:
-      slave_db_1:
+      pg_pool:
         condition: service_healthy
     volumes:
       - music:/music/static-root
@@ -99,7 +165,7 @@ services:
       context: music_analysis/
       dockerfile: Dockerfile
       args:
-        - DB_HOST=master_db # have to use "localhost" to refer to host when "ecs_network_mode" is "awsvpc" 
+        - DB_HOST=pg-0 # have to use "localhost" to refer to host when "ecs_network_mode" is "awsvpc" 
         - DB_NAME=music
         - DB_USER=ann
         - DB_PASSWORD=GxXynskDj134yi7P
